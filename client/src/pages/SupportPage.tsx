@@ -39,24 +39,35 @@ function TicketThread({ ticketId, staff = false }: TicketThreadProps) {
   const { supabaseUser } = useAuth();
   const { data, refetch, isFetching } = trpc.support.get.useQuery({ ticketId }, { refetchInterval: 5000, refetchIntervalInBackground: true });
   const [body, setBody] = useState("");
-  const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem("chroma-chat-sound") !== "off");
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [connectionState, setConnectionState] = useState<"connecting" | "live" | "reconnecting">("connecting");
   const knownMessageIds = useRef<Set<number>>(new Set());
+  const hydrated = useRef(false);
+  const messageList = useRef<HTMLDivElement>(null);
+  const refetchTimer = useRef<number | null>(null);
   const reply = trpc.support.reply.useMutation({ onSuccess: () => { setBody(""); void refetch(); } });
+
+  useEffect(() => {
+    setSoundEnabled(localStorage.getItem("chroma-chat-sound") !== "off");
+  }, []);
 
   useEffect(() => {
     if (!data) return;
     const incoming = data.messages.filter(row => !knownMessageIds.current.has(row.message.id));
     const hasIncoming = incoming.some(row => row.message.authorOpenId !== supabaseUser?.id);
     knownMessageIds.current = new Set(data.messages.map(row => row.message.id));
-    if (hasIncoming && soundEnabled) playMessageTone();
+    if (hydrated.current && hasIncoming && soundEnabled) playMessageTone();
+    hydrated.current = true;
+    window.requestAnimationFrame(() => { if (messageList.current) messageList.current.scrollTop = messageList.current.scrollHeight; });
   }, [data, soundEnabled, supabaseUser?.id]);
 
   useEffect(() => {
+    const scheduleRefresh = () => { if (refetchTimer.current !== null) return; refetchTimer.current = window.setTimeout(() => { refetchTimer.current = null; void refetch(); }, 120); };
     const channel = supabase.channel(`support-ticket-${ticketId}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "support_messages", filter: `ticket_id=eq.${ticketId}` }, () => { void refetch(); })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "support_tickets", filter: `id=eq.${ticketId}` }, () => { void refetch(); })
-      .subscribe();
-    return () => { void supabase.removeChannel(channel); };
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "support_messages", filter: `ticket_id=eq.${ticketId}` }, scheduleRefresh)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "support_tickets", filter: `id=eq.${ticketId}` }, scheduleRefresh)
+      .subscribe(status => setConnectionState(status === "SUBSCRIBED" ? "live" : status === "CHANNEL_ERROR" || status === "TIMED_OUT" ? "reconnecting" : "connecting"));
+    return () => { if (refetchTimer.current !== null) window.clearTimeout(refetchTimer.current); void supabase.removeChannel(channel); };
   }, [ticketId, refetch]);
 
   const toggleSound = () => {
@@ -69,10 +80,10 @@ function TicketThread({ ticketId, staff = false }: TicketThreadProps) {
   if (!data) return <div className="surface p-6 text-sm text-muted-foreground">Загрузка тикета…</div>;
   return <div className="chat-panel flex min-h-[560px] flex-col overflow-hidden rounded-2xl">
     <div className="flex items-start justify-between gap-3 border-b border-white/10 bg-white/[.025] p-5">
-      <div><div className="eyebrow">#{data.ticket.id} · {data.ticket.category}</div><h2 className="mt-2 text-lg font-semibold">{data.ticket.subject}</h2><div className="mt-2 flex items-center gap-2 text-[11px] text-primary"><span className="live-dot" />{isFetching ? "Синхронизация…" : "Чат обновляется автоматически"}</div></div>
+      <div><div className="eyebrow">#{data.ticket.id} · {data.ticket.category}</div><h2 className="mt-2 text-lg font-semibold">{data.ticket.subject}</h2><div className="mt-2 flex items-center gap-2 text-[11px] text-primary"><span className="live-dot" />{connectionState === "live" && !isFetching ? "Синхронизация в реальном времени" : connectionState === "reconnecting" ? "Переподключение…" : "Синхронизация…"}</div></div>
       <div className="flex items-center gap-2"><button onClick={toggleSound} title={soundEnabled ? "Выключить звук" : "Включить звук"} className="rounded-lg border border-white/10 p-2 text-muted-foreground hover:border-primary/40 hover:text-primary">{soundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}</button><span className="rounded-full bg-primary/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[.15em] text-primary">{data.ticket.status}</span></div>
     </div>
-    <div className="grid flex-1 content-start gap-3 overflow-auto bg-[radial-gradient(circle_at_top_right,rgba(190,255,92,.07),transparent_30%)] p-5">
+    <div ref={messageList} className="grid flex-1 content-start gap-3 overflow-auto scroll-smooth bg-[radial-gradient(circle_at_top_right,rgba(190,255,92,.07),transparent_30%)] p-5">
       {data.messages.map(row => { const fromUser = row.message.authorOpenId === data.ticket.userOpenId; return <div key={row.message.id} className={`chat-bubble max-w-[86%] rounded-2xl border p-3 text-sm ${fromUser ? "border-white/10 bg-white/[.035]" : "ml-auto border-primary/20 bg-primary/[.08]"}`}><div className="mb-1 flex items-center justify-between gap-4 text-[10px] text-muted-foreground"><span>{row.author.name || row.author.username || row.author.email || (fromUser ? "Пользователь" : "Support")}</span><span>{new Date(row.message.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span></div><div className="whitespace-pre-wrap leading-6">{row.message.body}</div></div>; })}
     </div>
     <div className="border-t border-white/10 bg-black/10 p-4"><div className="flex gap-2"><textarea value={body} onChange={event => setBody(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (body.trim()) reply.mutate({ ticketId, body }); } }} placeholder={staff ? "Ответить пользователю… (Enter — отправить)" : "Ваш ответ… (Enter — отправить)"} className="min-h-12 flex-1 resize-none rounded-xl border border-white/10 bg-white/[.04] px-3 py-2 text-sm outline-none transition focus:border-primary/60" /><Button disabled={!body.trim() || reply.isPending} onClick={() => reply.mutate({ ticketId, body })} className="self-end rounded-xl bg-primary text-[#10150c]"><Send className="mr-2 h-4 w-4" />Отправить</Button></div><div className="mt-2 text-[10px] text-muted-foreground">Сообщения доставляются без перезагрузки страницы. Shift + Enter — новая строка.</div></div>
