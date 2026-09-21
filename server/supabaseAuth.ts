@@ -2,6 +2,8 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { Request } from "express";
 import { upsertUser, getUserByOpenId } from "./db";
 import { ENV } from "./_core/env";
+import { isCreatorEmail } from "../shared/creators";
+import { CREATOR_UID } from "../shared/creators";
 
 const supabaseUrl = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "https://rsbcqzeyiazogktztubu.supabase.co";
 const jwksUrl = process.env.SUPABASE_JWKS_URL ?? `${supabaseUrl}/auth/v1/.well-known/jwks.json`;
@@ -57,9 +59,9 @@ export async function authenticateSupabaseRequest(req: Request) {
   const supabaseProfile = await supabaseProfileRole(openId);
   const profileRole = supabaseProfile?.role;
   const knownRoles = ["user", "developer", "admin", "support", "media", "moderator"] as const;
-  const role = profileRole === "owner" ? "developer" : knownRoles.includes(profileRole as typeof knownRoles[number]) ? profileRole as typeof knownRoles[number] : storedUser?.role ?? "user";
+  const role = isCreatorEmail(email) ? "developer" : profileRole === "owner" ? "developer" : knownRoles.includes(profileRole as typeof knownRoles[number]) ? profileRole as typeof knownRoles[number] : storedUser?.role ?? "user";
   const isActive = supabaseProfile?.status ? supabaseProfile.status === "active" : storedUser?.status !== "banned";
-  if (storedUser) return { ...storedUser, role, status: isActive ? "active" as const : "suspended" as const };
+  if (storedUser) return { ...storedUser, id: isCreatorEmail(email) ? CREATOR_UID : storedUser.id, role, status: isActive ? "active" as const : "suspended" as const };
   return { id: 0, openId, username, name: username, email, loginMethod: "supabase", role, status: isActive ? "active" as const : "suspended" as const, createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date(), lastLoginAt: new Date() };
 }
 

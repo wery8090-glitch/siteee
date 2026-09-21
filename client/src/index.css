@@ -181,3 +181,8 @@ input::placeholder, textarea::placeholder { color: rgba(137,149,131,.66); }
 }
 
 h1, h2, h3, h4 { font-family: "Space Grotesk", "DM Sans", ui-sans-serif, system-ui, sans-serif; }
+.chat-panel { background: linear-gradient(145deg, rgba(18,27,20,.96), rgba(10,14,12,.96)); border: 1px solid rgba(190,226,170,.14); box-shadow: 0 24px 75px rgba(0,0,0,.22), inset 0 1px rgba(255,255,255,.04); }
+.chat-bubble { animation: chat-in 180ms var(--ease-out) both; }
+.live-dot { width: .45rem; height: .45rem; border-radius: 999px; display: inline-block; background: var(--primary); box-shadow: 0 0 0 0 rgba(186,255,54,.55); }
+@media (prefers-reduced-motion: no-preference) { .live-dot { animation: pulse-dot 2.4s ease-in-out infinite; } }
+@keyframes chat-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
